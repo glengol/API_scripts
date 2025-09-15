@@ -10,6 +10,10 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 import click
+from tqdm import tqdm
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from firefly_client import FireflyClient
 from resolver import ParentResolver
@@ -54,42 +58,91 @@ def get_credentials(access_key: Optional[str], secret_key: Optional[str]) -> tup
     return api_access_key, api_secret_key
 
 
-def process_snapshots(client: FireflyClient, resolver: ParentResolver, normalizer: DataNormalizer,
-                     account_ids: List[str], regions: List[str] = None, since: Optional[str] = None, orphaned_only: bool = False, parent_only: bool = False):
+def collect_snapshots_parallel(client: FireflyClient, account_ids: List[str], regions: List[str] = None, since: Optional[str] = None):
     """
-    Process snapshots with optimized batch processing to reduce API calls.
+    Collect EBS and DB snapshots in parallel for better performance.
     """
-    # Collect all snapshots first for batch processing
     all_snapshots = []
     logger = logging.getLogger(__name__)
     
-    # Process EBS snapshots
-    logger.info("Collecting EBS snapshots...")
+    def collect_ebs_snapshots(account_id, region):
+        """Collect EBS snapshots for a specific account/region"""
+        snapshots = []
+        try:
+            for snapshot in client.list_ebs_snapshots(account_id, region, since):
+                snapshots.append(('ebs', snapshot, account_id, region))
+        except Exception as e:
+            logger.error(f"Error collecting EBS snapshots for account {account_id}, region {region}: {e}")
+        return snapshots
+    
+    def collect_db_snapshots(account_id, region):
+        """Collect DB snapshots for a specific account/region"""
+        snapshots = []
+        try:
+            for snapshot in client.list_db_snapshots(account_id, region, since):
+                snapshots.append(('db', snapshot, account_id, region))
+        except Exception as e:
+            logger.error(f"Error collecting DB snapshots for account {account_id}, region {region}: {e}")
+        return snapshots
+    
+    # Create tasks for parallel execution
+    tasks = []
     for account_id in account_ids or [None]:
         for region in regions or [None]:
-            try:
-                for snapshot in client.list_ebs_snapshots(account_id, region, since):
-                    all_snapshots.append(('ebs', snapshot, account_id, region))
-            except Exception as e:
-                logger.error(f"Error collecting EBS snapshots for account {account_id}, region {region}: {e}")
+            tasks.append((collect_ebs_snapshots, account_id, region))
+            tasks.append((collect_db_snapshots, account_id, region))
     
-    # Process DB snapshots
-    logger.info("Collecting DB snapshots...")
-    for account_id in account_ids or [None]:
-        for region in regions or [None]:
-            try:
-                for snapshot in client.list_db_snapshots(account_id, region, since):
-                    all_snapshots.append(('db', snapshot, account_id, region))
-            except Exception as e:
-                logger.error(f"Error collecting DB snapshots for account {account_id}, region {region}: {e}")
+    # Execute tasks in parallel with progress bar
+    with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as executor:
+        # Submit all tasks
+        future_to_task = {
+            executor.submit(func, account_id, region): (func.__name__, account_id, region)
+            for func, account_id, region in tasks
+        }
+        
+        # Process results with progress bar
+        with tqdm(total=len(tasks), desc="Collecting snapshots", unit="task") as pbar:
+            for future in as_completed(future_to_task):
+                task_name, account_id, region = future_to_task[future]
+                try:
+                    snapshots = future.result()
+                    all_snapshots.extend(snapshots)
+                    pbar.set_postfix({
+                        'account': account_id or 'all',
+                        'region': region or 'all',
+                        'type': 'EBS' if 'ebs' in task_name else 'DB',
+                        'count': len(snapshots)
+                    })
+                except Exception as e:
+                    logger.error(f"Task {task_name} failed for account {account_id}, region {region}: {e}")
+                finally:
+                    pbar.update(1)
     
+    return all_snapshots
+
+
+def process_snapshots(client: FireflyClient, resolver: ParentResolver, normalizer: DataNormalizer,
+                     account_ids: List[str], regions: List[str] = None, since: Optional[str] = None, orphaned_only: bool = False, parent_only: bool = False):
+    """
+    Process snapshots with optimized batch processing and progress bars.
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Collect all snapshots with progress bar
+    logger.info("Starting snapshot collection...")
+    all_snapshots = collect_snapshots_parallel(client, account_ids, regions, since)
     logger.info(f"Collected {len(all_snapshots)} total snapshots for processing")
+    
+    if not all_snapshots:
+        logger.warning("No snapshots found to process")
+        return
     
     # Group snapshots by type for batch processing
     ebs_snapshots = [(s, a, r) for t, s, a, r in all_snapshots if t == 'ebs']
     db_snapshots = [(s, a, r) for t, s, a, r in all_snapshots if t == 'db']
     
-    # Batch resolve EBS parents
+    # Batch resolve EBS parents with progress bar
+    ebs_parents = {}
     if ebs_snapshots:
         logger.info(f"Batch resolving parents for {len(ebs_snapshots)} EBS snapshots...")
         # Group by account/region for batch processing
@@ -100,37 +153,59 @@ def process_snapshots(client: FireflyClient, resolver: ParentResolver, normalize
                 ebs_by_account_region[key] = []
             ebs_by_account_region[key].append(snapshot)
         
-        # Batch resolve for each account/region combination
-        ebs_parents = {}
-        for (account_id, region), snapshots in ebs_by_account_region.items():
-            batch_results = resolver.resolve_ebs_parents_batch(snapshots, account_id, region)
-            ebs_parents.update(batch_results)
+        # Batch resolve for each account/region combination with progress bar
+        with tqdm(total=len(ebs_by_account_region), desc="Resolving EBS parents", unit="batch") as pbar:
+            for (account_id, region), snapshots in ebs_by_account_region.items():
+                try:
+                    batch_results = resolver.resolve_ebs_parents_batch(snapshots, account_id, region)
+                    ebs_parents.update(batch_results)
+                    pbar.set_postfix({
+                        'account': account_id or 'all',
+                        'region': region or 'all',
+                        'snapshots': len(snapshots)
+                    })
+                except Exception as e:
+                    logger.error(f"Error batch resolving EBS parents for account {account_id}, region {region}: {e}")
+                finally:
+                    pbar.update(1)
     
-    # Process and yield snapshots
-    for snapshot_type, snapshot, account_id, region in all_snapshots:
-        try:
-            # Resolve parent based on type
-            if snapshot_type == 'ebs':
-                parent, orphaned = ebs_parents.get(snapshot.get('resourceId'), (None, True))
-            else:  # db
-                parent, orphaned = resolver.resolve_db_parent(snapshot, account_id, region)
-            
-            # Apply filters if specified
-            if orphaned_only and not orphaned:
-                continue  # Skip non-orphaned snapshots
-            if parent_only and orphaned:
-                continue  # Skip orphaned snapshots
-            
-            # Normalize data
-            normalized = normalizer.normalize_snapshot_data(
-                snapshot, snapshot_type, parent, orphaned
-            )
-            
-            yield normalized
-            
-        except Exception as e:
-            logger.error(f"Error processing {snapshot_type} snapshot {snapshot.get('resourceId', 'unknown')}: {e}")
-            continue
+    # Process and yield snapshots with progress bar
+    processed_count = 0
+    with tqdm(total=len(all_snapshots), desc="Processing snapshots", unit="snapshot") as pbar:
+        for snapshot_type, snapshot, account_id, region in all_snapshots:
+            try:
+                # Resolve parent based on type
+                if snapshot_type == 'ebs':
+                    parent, orphaned = ebs_parents.get(snapshot.get('resourceId'), (None, True))
+                else:  # db
+                    parent, orphaned = resolver.resolve_db_parent(snapshot, account_id, region)
+                
+                # Apply filters if specified
+                if orphaned_only and not orphaned:
+                    pbar.update(1)
+                    continue  # Skip non-orphaned snapshots
+                if parent_only and orphaned:
+                    pbar.update(1)
+                    continue  # Skip orphaned snapshots
+                
+                # Normalize data
+                normalized = normalizer.normalize_snapshot_data(
+                    snapshot, snapshot_type, parent, orphaned
+                )
+                
+                processed_count += 1
+                pbar.set_postfix({
+                    'processed': processed_count,
+                    'type': snapshot_type.upper(),
+                    'orphaned': 'yes' if orphaned else 'no'
+                })
+                
+                yield normalized
+                
+            except Exception as e:
+                logger.error(f"Error processing {snapshot_type} snapshot {snapshot.get('resourceId', 'unknown')}: {e}")
+            finally:
+                pbar.update(1)
 
 
 @click.command()
@@ -233,19 +308,22 @@ def main(firefly_base_url: str, firefly_access_key: Optional[str],
         processing_time = time.time() - start_time
         logger.info(f"Snapshot processing completed in {processing_time:.2f} seconds")
         
-        # Export based on format
+        # Export based on format with progress bars
         if csv_exporter and html_generator:
             # Both formats needed - convert to list first to avoid consuming iterator
-            snapshots_list = list(snapshots)
+            logger.info("Converting snapshots to list for dual export...")
+            snapshots_list = list(tqdm(snapshots, desc="Converting to list", unit="snapshot"))
             
             # CSV export
             csv_start = time.time()
+            logger.info("Starting CSV export...")
             csv_exporter.export_snapshots(snapshots_list)
             csv_time = time.time() - csv_start
             logger.info(f"CSV export completed in {csv_time:.2f} seconds")
             
             # HTML export
             html_start = time.time()
+            logger.info("Starting HTML report generation...")
             html_filename = Path(out).stem + ".html"
             html_generator.generate_report(snapshots_list, html_filename)
             html_time = time.time() - html_start
@@ -254,6 +332,7 @@ def main(firefly_base_url: str, firefly_access_key: Optional[str],
         elif csv_exporter:
             # CSV only
             csv_start = time.time()
+            logger.info("Starting CSV export...")
             csv_exporter.export_snapshots(snapshots)
             csv_time = time.time() - csv_start
             logger.info(f"CSV export completed in {csv_time:.2f} seconds")
@@ -261,7 +340,9 @@ def main(firefly_base_url: str, firefly_access_key: Optional[str],
         elif html_generator:
             # HTML only
             html_start = time.time()
-            snapshots_list = list(snapshots)
+            logger.info("Converting snapshots to list for HTML export...")
+            snapshots_list = list(tqdm(snapshots, desc="Converting to list", unit="snapshot"))
+            logger.info("Starting HTML report generation...")
             html_filename = Path(out).stem + ".html"
             html_generator.generate_report(snapshots_list, html_filename)
             html_time = time.time() - html_start

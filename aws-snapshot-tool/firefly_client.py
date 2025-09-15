@@ -419,6 +419,7 @@ class FireflyClient:
             volumes = data.get('responseObjects', [])
             volume_map = {vol.get('resourceId'): vol for vol in volumes}
             
+            logger.debug(f"Batch fetched {len(volume_map)} volumes out of {len(volume_ids)} requested")
             return volume_map
             
         except Exception as e:
