@@ -143,6 +143,7 @@ class DataNormalizer:
             'snapshot_type': snapshot_type,
             'creation_date': '',
             'size_gb': '',
+            'storage_tier': '',  # Store storage tier for EBS snapshots
             'parent_resource_type': '',
             'parent_resource_id': '',
             'parent_name': '',
@@ -169,7 +170,39 @@ class DataNormalizer:
         
         # Extract size - using actual Firefly API field names
         if snapshot_type == 'ebs':
-            size_gb = snapshot.get('tfObject', {}).get('volume_size')
+            tf_object = snapshot.get('tfObject', {})
+            storage_tier = tf_object.get('storage_tier')
+            # Store storage_tier for cost calculation
+            normalized['storage_tier'] = storage_tier if storage_tier else ''
+            size_gb = None
+            
+            if storage_tier == 'standard':
+                # For standard tier: try full_snapshot_size_in_bytes first, fallback to volume_size
+                full_size_bytes = tf_object.get('full_snapshot_size_in_bytes')
+                if full_size_bytes is not None:
+                    # Convert bytes to GB
+                    size_gb = full_size_bytes / (1024 * 1024 * 1024)
+                    logger.debug(f"Using full_snapshot_size_in_bytes for standard tier snapshot {snapshot.get('assetId', '') or snapshot.get('resourceId', '')}")
+                else:
+                    # Fallback to volume_size if full_snapshot_size_in_bytes is missing
+                    size_gb = tf_object.get('volume_size')
+                    if size_gb is not None:
+                        logger.debug(f"Using volume_size as fallback for standard tier snapshot {snapshot.get('assetId', '') or snapshot.get('resourceId', '')}")
+            else:
+                # For archive tier or any other tier (including None/missing): always use volume_size
+                size_gb = tf_object.get('volume_size')
+                if size_gb is not None:
+                    logger.debug(f"Using volume_size for {storage_tier or 'unspecified'} tier snapshot {snapshot.get('assetId', '') or snapshot.get('resourceId', '')}")
+            
+            # Log detailed warning if size is still missing
+            if size_gb is None:
+                snapshot_id = snapshot.get('assetId', '') or snapshot.get('resourceId', '') or 'unknown'
+                logger.warning(
+                    f"Missing size information for snapshot {snapshot_id}: "
+                    f"storage_tier={storage_tier}, "
+                    f"full_snapshot_size_in_bytes={tf_object.get('full_snapshot_size_in_bytes')}, "
+                    f"volume_size={tf_object.get('volume_size')}"
+                )
         elif snapshot_type == 'db':
             size_gb = snapshot.get('tfObject', {}).get('allocated_storage')
         else:
@@ -178,7 +211,6 @@ class DataNormalizer:
         if size_gb is not None:
             normalized['size_gb'] = str(size_gb)
         else:
-            logger.warning("Missing size information — not found in snapshot schema")
             normalized['size_gb'] = ''  # Leave blank as per requirements
         
         # Extract account and region
@@ -262,10 +294,14 @@ class DataNormalizer:
         size_gb = snapshot_data.get('size_gb')
         region = snapshot_data.get('region')
         snapshot_type = snapshot_data.get('snapshot_type')
+        storage_tier = snapshot_data.get('storage_tier')  # Get storage tier for EBS snapshots
+        
         if not all([size_gb, region, snapshot_type]):
             return 'prices_not_provided'
         try:
-            cost = self.pricing_fetcher.calculate_monthly_cost(float(size_gb), region, snapshot_type)
+            # Pass storage_tier for EBS snapshots (None for DB snapshots)
+            tier = storage_tier if storage_tier and snapshot_type == 'ebs' else None
+            cost = self.pricing_fetcher.calculate_monthly_cost(float(size_gb), region, snapshot_type, tier)
             if cost is not None:
                 return f"${cost:.4f}"
         except (ValueError, TypeError):
@@ -279,12 +315,15 @@ class DataNormalizer:
         region = snapshot_data.get('region')
         snapshot_type = snapshot_data.get('snapshot_type')
         age_days = snapshot_data.get('age_days')
+        storage_tier = snapshot_data.get('storage_tier')  # Get storage tier for EBS snapshots
         
         # Fixed: age_days can be 0, which is falsy. Check for None instead.
         if not all([size_gb, region, snapshot_type]) or age_days is None:
             return 'prices_not_provided'
         try:
-            cost = self.pricing_fetcher.calculate_cost_since_creation(float(size_gb), region, snapshot_type, int(age_days))
+            # Pass storage_tier for EBS snapshots (None for DB snapshots)
+            tier = storage_tier if storage_tier and snapshot_type == 'ebs' else None
+            cost = self.pricing_fetcher.calculate_cost_since_creation(float(size_gb), region, snapshot_type, int(age_days), tier)
             if cost is not None:
                 return f"${cost:.4f}"
         except (ValueError, TypeError):
