@@ -86,6 +86,14 @@ class HTMLReportGenerator:
             padding: 2rem 0;
             margin-top: 3rem;
         }
+        .snapshot-id-cell {
+            max-width: 500px;
+            word-break: break-all;
+            white-space: normal;
+        }
+        code {
+            font-size: 0.9em;
+        }
     </style>
 </head>
 <body>
@@ -218,9 +226,9 @@ class HTMLReportGenerator:
                                 <tbody>
                                     {% for snapshot in orphaned_snapshots %}
                                     <tr>
-                                        <td><code>{{ snapshot.snapshot_id[:20] }}...</code></td>
+                                        <td class="snapshot-id-cell"><code>{{ snapshot.snapshot_id }}</code></td>
                                         <td><span class="badge bg-{{ 'primary' if snapshot.snapshot_type == 'ebs' else 'success' }}">{{ snapshot.snapshot_type.upper() }}</span></td>
-                                        <td>{{ snapshot.size_gb }}</td>
+                                        <td>{% if snapshot.size_gb %}{{ "%.2f"|format(snapshot.size_gb|float) }}{% else %}N/A{% endif %}</td>
                                         <td>{{ snapshot.age_days }}</td>
                                         <td class="text-danger fw-bold">{{ snapshot.monthly_cost }}</td>
                                         <td class="text-danger">{{ snapshot.cost_since_creation }}</td>
@@ -263,15 +271,15 @@ class HTMLReportGenerator:
                                 <tbody>
                                     {% for snapshot in all_snapshots %}
                                     <tr class="{{ 'table-warning' if snapshot.orphaned else '' }}">
-                                        <td><code>{{ snapshot.snapshot_id[:20] }}...</code></td>
+                                        <td class="snapshot-id-cell"><code>{{ snapshot.snapshot_id }}</code></td>
                                         <td><span class="badge bg-{{ 'primary' if snapshot.snapshot_type == 'ebs' else 'success' }}">{{ snapshot.snapshot_type.upper() }}</span></td>
                                         <td>{{ snapshot.creation_date[:10] if snapshot.creation_date else 'N/A' }}</td>
-                                        <td>{{ snapshot.size_gb }}</td>
+                                        <td>{% if snapshot.size_gb %}{{ "%.2f"|format(snapshot.size_gb|float) }}{% else %}N/A{% endif %}</td>
                                         <td>
                                             {% if snapshot.orphaned %}
                                                 <span class="text-danger">Orphaned</span>
                                             {% else %}
-                                                {{ snapshot.parent_resource_type }}: {{ snapshot.parent_resource_id[:20] if snapshot.parent_resource_id else 'N/A' }}...
+                                                <span class="snapshot-id-cell">{{ snapshot.parent_resource_type }}: <code>{{ snapshot.parent_resource_id if snapshot.parent_resource_id else 'N/A' }}</code></span>
                                             {% endif %}
                                         </td>
                                         <td>{{ snapshot.account_id }}</td>
@@ -327,13 +335,24 @@ class HTMLReportGenerator:
             $('#mainTable').DataTable({
                 pageLength: 25,
                 order: [[7, 'desc']], // Sort by age descending
-                responsive: true
+                responsive: false,
+                scrollX: true,
+                autoWidth: false,
+                columnDefs: [
+                    { width: "250px", targets: 0 }, // Snapshot ID column
+                    { width: "300px", targets: 4 }  // Parent Resource column
+                ]
             });
             
             $('#savingsTable').DataTable({
                 pageLength: 10,
                 order: [[4, 'desc']], // Sort by monthly cost descending
-                responsive: true
+                responsive: false,
+                scrollX: true,
+                autoWidth: false,
+                columnDefs: [
+                    { width: "250px", targets: 0 }  // Snapshot ID column
+                ]
             });
         });
 
