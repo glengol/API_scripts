@@ -121,6 +121,11 @@ chmod +x fetch-snapshot-prices.sh
 
 **Output**: Creates `./aws/snapshot-prices.json` with current pricing data
 
+The pricing file includes:
+- **EBS Standard Tier** (`ebs_snapshot_gb_month`): From `EBS:SnapshotUsage` pricing
+- **EBS Archive Tier** (`ebs_snapshot_archive_gb_month`): From `EBS:SnapshotArchiveStorage` pricing
+- **RDS Snapshots** (`rds_snapshot_gb_month`): From `:ChargedBackupUsage` pricing
+
 ## Usage
 
 ### Command Line Options
@@ -256,8 +261,11 @@ When using `--format html` or `--format both`, the tool generates interactive HT
 
 - **Overview Dashboard**: Total snapshots, orphaned count, cost metrics
 - **Interactive Tables**: Sortable and filterable data tables using DataTables.js
+  - **Cost Savings Opportunities Table**: Shows orphaned snapshots with storage tier information
+  - **Detailed Snapshot Data Table**: Complete snapshot information including storage tier for EBS snapshots
+- **Storage Tier Display**: Visual badges showing storage tier (Standard/Archive) for EBS snapshots
 - **Visual Charts**: Bar charts, pie charts, and histograms using Chart.js
-- **Cost Analysis**: Orphaned snapshot cost savings opportunities
+- **Cost Analysis**: Orphaned snapshot cost savings opportunities with tier-appropriate pricing
 - **Modern UI**: Bootstrap 5 styling with responsive design
 
 ## CSV Output Format
@@ -308,6 +316,40 @@ The tool maps Firefly API response fields to CSV columns. If a required field is
    - Extract `db_instance_identifier` from snapshot
    - Query database instance details directly
 
+### Size Calculation Methods
+
+The tool extracts snapshot size (`size_gb`) using different methods depending on the snapshot type and storage tier:
+
+#### EBS Snapshots
+
+Size extraction for EBS snapshots depends on the `storage_tier` field from the Firefly API:
+
+**Standard Tier (`storage_tier == "standard"`)**:
+1. Primary method: Uses `full_snapshot_size_in_bytes` from `tfObject`
+   - Converts bytes to GB: `size_gb = full_snapshot_size_in_bytes / (1024³)`
+2. Fallback method: If `full_snapshot_size_in_bytes` is missing or None, falls back to `volume_size` from `tfObject`
+
+**Archive Tier or Other Tiers** (`storage_tier != "standard"` or missing):
+- Always uses `volume_size` from `tfObject`
+- This includes archive tier snapshots and any snapshots where `storage_tier` is None or not specified
+
+**Summary**:
+- Standard tier: `full_snapshot_size_in_bytes` → `volume_size` (fallback)
+- Archive/other tiers: `volume_size` only
+- Missing `storage_tier`: Treated as non-standard, uses `volume_size` only
+
+#### DB Snapshots
+
+Size extraction for RDS/DB snapshots:
+- Always uses `allocated_storage` from `tfObject`
+
+#### Missing Size Information
+
+If size information cannot be extracted using the above methods:
+- The `size_gb` field will be blank (empty string)
+- Cost calculations will show `prices_not_provided`
+- A WARN log will be generated with detailed information about which fields were checked
+
 ### Environment Tag Extraction
 
 The tool searches for environment tags in this priority order (case-insensitive):
@@ -324,12 +366,37 @@ A snapshot is marked as orphaned (`orphaned=true`) when:
 
 ### Cost Calculation
 
-Cost calculations are based on:
-- Snapshot size in GB
-- AWS region pricing from `./aws/snapshot-prices.json`
-- Snapshot age for total cost calculation
-- Monthly cost = size_gb × price_per_gb_month
-- Total cost = monthly_cost × (age_days / 30.44)
+Cost calculations require valid size information (see [Size Calculation Methods](#size-calculation-methods) above). If size cannot be determined, costs will show as `prices_not_provided`.
+
+#### Pricing Selection
+
+The tool selects pricing based on snapshot type and storage tier. The following table shows how pricing is determined:
+
+| Snapshot Type | Storage Tier | Pricing Field | AWS Pricing Type | Notes |
+|---------------|--------------|---------------|------------------|-------|
+| EBS | `standard` or missing | `ebs_snapshot_gb_month` | `EBS:SnapshotUsage` | Standard tier pricing (default) |
+| EBS | `archive` | `ebs_snapshot_archive_gb_month` | `EBS:SnapshotArchiveStorage` | Archive tier pricing (typically lower) |
+| DB | N/A | `rds_snapshot_gb_month` | `:ChargedBackupUsage` | Storage tier not applicable for DB snapshots |
+
+#### Cost Calculation Process
+
+1. **Extract size**: Uses the size calculation methods based on snapshot type and storage tier
+2. **Determine pricing tier**: Identifies storage tier for EBS snapshots (standard vs archive)
+3. **Get pricing**: Retrieves region-specific pricing from `./aws/snapshot-prices.json` based on snapshot type and tier
+4. **Calculate costs**:
+   - **Monthly cost**: `size_gb × price_per_gb_month` (using tier-appropriate pricing)
+   - **Total cost**: `monthly_cost × (age_days / 30.44)`
+
+**Cost Calculation Formula**:
+- Monthly cost = `size_gb × price_per_gb_month` (tier-specific for EBS)
+- Total cost = `monthly_cost × (age_days / 30.44)` (average days per month)
+
+**Note**: Cost calculations depend on:
+- Snapshot size in GB (extracted via size calculation methods)
+- Snapshot type (EBS vs DB)
+- Storage tier for EBS snapshots (standard vs archive)
+- AWS region pricing data from `./aws/snapshot-prices.json`
+- Snapshot age in days
 
 ## Testing
 

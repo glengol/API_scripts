@@ -216,6 +216,7 @@ class HTMLReportGenerator:
                                     <tr>
                                         <th>Snapshot ID</th>
                                         <th>Type</th>
+                                        <th>Storage Tier</th>
                                         <th>Size (GB)</th>
                                         <th>Age (Days)</th>
                                         <th>Monthly Cost</th>
@@ -228,6 +229,7 @@ class HTMLReportGenerator:
                                     <tr>
                                         <td class="snapshot-id-cell"><code>{{ snapshot.snapshot_id }}</code></td>
                                         <td><span class="badge bg-{{ 'primary' if snapshot.snapshot_type == 'ebs' else 'success' }}">{{ snapshot.snapshot_type.upper() }}</span></td>
+                                        <td>{% if snapshot.snapshot_type == 'ebs' and snapshot.storage_tier %}<span class="badge bg-{{ 'info' if snapshot.storage_tier == 'standard' else 'warning' }}">{{ snapshot.storage_tier.upper() }}</span>{% else %}-{% endif %}</td>
                                         <td>{% if snapshot.size_gb %}{{ "%.2f"|format(snapshot.size_gb|float) }}{% else %}N/A{% endif %}</td>
                                         <td>{{ snapshot.age_days }}</td>
                                         <td class="text-danger fw-bold">{{ snapshot.monthly_cost }}</td>
@@ -257,6 +259,7 @@ class HTMLReportGenerator:
                                     <tr>
                                         <th>Snapshot ID</th>
                                         <th>Type</th>
+                                        <th>Storage Tier</th>
                                         <th>Creation Date</th>
                                         <th>Size (GB)</th>
                                         <th>Parent Resource</th>
@@ -273,6 +276,7 @@ class HTMLReportGenerator:
                                     <tr class="{{ 'table-warning' if snapshot.orphaned else '' }}">
                                         <td class="snapshot-id-cell"><code>{{ snapshot.snapshot_id }}</code></td>
                                         <td><span class="badge bg-{{ 'primary' if snapshot.snapshot_type == 'ebs' else 'success' }}">{{ snapshot.snapshot_type.upper() }}</span></td>
+                                        <td>{% if snapshot.snapshot_type == 'ebs' and snapshot.storage_tier %}<span class="badge bg-{{ 'info' if snapshot.storage_tier == 'standard' else 'warning' }}">{{ snapshot.storage_tier.upper() }}</span>{% else %}-{% endif %}</td>
                                         <td>{{ snapshot.creation_date[:10] if snapshot.creation_date else 'N/A' }}</td>
                                         <td>{% if snapshot.size_gb %}{{ "%.2f"|format(snapshot.size_gb|float) }}{% else %}N/A{% endif %}</td>
                                         <td>
@@ -334,19 +338,19 @@ class HTMLReportGenerator:
         $(document).ready(function() {
             $('#mainTable').DataTable({
                 pageLength: 25,
-                order: [[7, 'desc']], // Sort by age descending
+                order: [[8, 'desc']], // Sort by age descending (column index 8)
                 responsive: false,
                 scrollX: true,
                 autoWidth: false,
                 columnDefs: [
                     { width: "250px", targets: 0 }, // Snapshot ID column
-                    { width: "300px", targets: 4 }  // Parent Resource column
+                    { width: "300px", targets: 5 }  // Parent Resource column (moved to index 5)
                 ]
             });
             
             $('#savingsTable').DataTable({
                 pageLength: 10,
-                order: [[4, 'desc']], // Sort by monthly cost descending
+                order: [[5, 'desc']], // Sort by monthly cost descending (column index 5)
                 responsive: false,
                 scrollX: true,
                 autoWidth: false,

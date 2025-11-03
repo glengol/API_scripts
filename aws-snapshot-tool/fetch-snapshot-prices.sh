@@ -101,6 +101,21 @@ get_ebs_snapshot_price() {
   | pick_first_price_by_usage_suffix "EBS:SnapshotUsage"
 }
 
+get_ebs_snapshot_archive_price() {
+  local location="$1"
+  aws pricing get-products \
+    $AWS_PROFILE_OPT \
+    --region us-east-1 \
+    --service-code AmazonEC2 \
+    --filters \
+      Type=TERM_MATCH,Field=productFamily,Value="Storage Snapshot" \
+      Type=TERM_MATCH,Field=location,Value="${location}" \
+    --max-results 100 \
+    --query 'PriceList' \
+    --output json 2>/dev/null \
+  | pick_first_price_by_usage_suffix "EBS:SnapshotArchiveStorage"
+}
+
 get_rds_snapshot_price() {
   local location="$1"
   aws pricing get-products \
@@ -131,13 +146,19 @@ for REGION in $REGIONS; do
 
   >&2 echo "Fetching $REGION ($LOCATION)..."
   EBS_PRICE=$(get_ebs_snapshot_price "$LOCATION" || true)
+  EBS_ARCHIVE_PRICE=$(get_ebs_snapshot_archive_price "$LOCATION" || true)
   RDS_PRICE=$(get_rds_snapshot_price "$LOCATION" || true)
 
   [[ "$EBS_PRICE" =~ ^[0-9]*\.?[0-9]+$ ]] || EBS_PRICE="null"
+  [[ "$EBS_ARCHIVE_PRICE" =~ ^[0-9]*\.?[0-9]+$ ]] || EBS_ARCHIVE_PRICE="null"
   [[ "$RDS_PRICE" =~ ^[0-9]*\.?[0-9]+$ ]] || RDS_PRICE="null"
 
-  jq --arg r "$REGION" --argjson e "${EBS_PRICE:-null}" --argjson d "${RDS_PRICE:-null}" '
-    .regions[$r] = { ebs_snapshot_gb_month: $e, rds_snapshot_gb_month: $d }
+  jq --arg r "$REGION" --argjson e "${EBS_PRICE:-null}" --argjson a "${EBS_ARCHIVE_PRICE:-null}" --argjson d "${RDS_PRICE:-null}" '
+    .regions[$r] = { 
+      ebs_snapshot_gb_month: $e, 
+      ebs_snapshot_archive_gb_month: $a,
+      rds_snapshot_gb_month: $d 
+    }
   ' "$TMP" > "${TMP}.1" && mv "${TMP}.1" "$TMP"
 done
 

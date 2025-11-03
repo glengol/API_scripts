@@ -143,6 +143,7 @@ class DataNormalizer:
             'snapshot_type': snapshot_type,
             'creation_date': '',
             'size_gb': '',
+            'storage_tier': '',  # Store storage tier for EBS snapshots
             'parent_resource_type': '',
             'parent_resource_id': '',
             'parent_name': '',
@@ -171,6 +172,8 @@ class DataNormalizer:
         if snapshot_type == 'ebs':
             tf_object = snapshot.get('tfObject', {})
             storage_tier = tf_object.get('storage_tier')
+            # Store storage_tier for cost calculation
+            normalized['storage_tier'] = storage_tier if storage_tier else ''
             size_gb = None
             
             if storage_tier == 'standard':
@@ -291,10 +294,14 @@ class DataNormalizer:
         size_gb = snapshot_data.get('size_gb')
         region = snapshot_data.get('region')
         snapshot_type = snapshot_data.get('snapshot_type')
+        storage_tier = snapshot_data.get('storage_tier')  # Get storage tier for EBS snapshots
+        
         if not all([size_gb, region, snapshot_type]):
             return 'prices_not_provided'
         try:
-            cost = self.pricing_fetcher.calculate_monthly_cost(float(size_gb), region, snapshot_type)
+            # Pass storage_tier for EBS snapshots (None for DB snapshots)
+            tier = storage_tier if storage_tier and snapshot_type == 'ebs' else None
+            cost = self.pricing_fetcher.calculate_monthly_cost(float(size_gb), region, snapshot_type, tier)
             if cost is not None:
                 return f"${cost:.4f}"
         except (ValueError, TypeError):
@@ -308,12 +315,15 @@ class DataNormalizer:
         region = snapshot_data.get('region')
         snapshot_type = snapshot_data.get('snapshot_type')
         age_days = snapshot_data.get('age_days')
+        storage_tier = snapshot_data.get('storage_tier')  # Get storage tier for EBS snapshots
         
         # Fixed: age_days can be 0, which is falsy. Check for None instead.
         if not all([size_gb, region, snapshot_type]) or age_days is None:
             return 'prices_not_provided'
         try:
-            cost = self.pricing_fetcher.calculate_cost_since_creation(float(size_gb), region, snapshot_type, int(age_days))
+            # Pass storage_tier for EBS snapshots (None for DB snapshots)
+            tier = storage_tier if storage_tier and snapshot_type == 'ebs' else None
+            cost = self.pricing_fetcher.calculate_cost_since_creation(float(size_gb), region, snapshot_type, int(age_days), tier)
             if cost is not None:
                 return f"${cost:.4f}"
         except (ValueError, TypeError):
