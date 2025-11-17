@@ -1,0 +1,11 @@
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-0add1764074ac6f12
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-02ad3572caf274982
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-06e1bf43ed302d08a
+arn:aws:ec2:eu-west-1:590184073875:security-group/sg-026b83fde6b5b3c37
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-0b573460dfc91a2d7
+arn:aws:ec2:eu-north-1:590184073875:security-group/sg-0153fdf81baa4328e
+arn:aws:ec2:eu-north-1:590184073875:security-group/sg-0a85ba82e07392130
+arn:aws:ec2:eu-north-1:590184073875:security-group/sg-0d69ba2157ea97de2
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-01f1f5882d15a8e56
+aws_security_group:us-east-1:sg-0b8ff9f7cf1f0017e
+arn:aws:ec2:us-east-1:590184073875:security-group/sg-0812f1fbd928e6d2a

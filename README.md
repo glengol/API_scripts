@@ -1,24 +1,15 @@
 # Scripts
 General scripts for customers
 
-## Available Tools
+This repository contains a collection of Python scripts that leverage various APIs to automate tasks and operations. The scripts interact with APIs like Firefly, GitHub, AWS, and Azure to perform bulk operations, generate reports, and manage resources programmatically.
 
-### AWS Snapshot Tool
-A high-performance CLI tool that correlates EBS and RDS/DB snapshots to their parent resources using the Firefly API. This tool generates comprehensive CSV and HTML reports showing the relationship between snapshots and their parent EC2 instances or database instances, with cost analysis and performance optimizations.
+## Overview
 
-**Key Features:**
-- EBS and DB snapshot correlation to parent resources
-- Comprehensive CSV and HTML reporting
-- Cost analysis with AWS pricing data
-- Orphan detection for cleanup opportunities
-- Environment tagging and resource state tracking
-- Performance optimized with batch processing
+These scripts use API integrations to:
+- Bulk codify cloud resources (AWS and Azure) into Terraform
+- Analyze and report on cloud snapshots and resources
+- Automate workspace creation from repository structures
+- Query and filter assets based on governance policies
+- Generate mappings and reports from API data
 
-**Quick Start:**
-```bash
-cd aws-snapshot-tool
-pip install -r requirements.txt
-python3 main.py --format both
-```
-
-For detailed documentation, installation instructions, and usage examples, see: [aws-snapshot-tool/README.md](./aws-snapshot-tool/README.md)
+Each script is self-contained and can be configured with API credentials and parameters as needed.
